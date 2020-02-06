@@ -1,9 +1,7 @@
 #include <sw_fifo.h>
  
- 
 sw_fifo_typedef rx_fifo = { {0}, 0, 0, 0 }; // declare a receive software buffer
 sw_fifo_typedef tx_fifo = { {0}, 0, 0, 0 }; // declare a transmit software buffer
-
  
 void uart_byte_received(uint8_t data) {
    
