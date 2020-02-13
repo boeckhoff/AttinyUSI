@@ -49,13 +49,18 @@ void USISerial::initialize_USI()
     PCMSK |= 1 << PCINT0; // Enable pin change on pin PB0
 
     // initialize timer1 for measuing byte-receive time
-    TCCR1 = 0;
-    TCCR1 |= (1 << CTC1);  // clear timer on compare match
-    TCCR1 |= (2 << CS10); //| (1 << CS10);// | (1 << CS10); //clock prescaler 256
-    OCR1C = 255; // compare match value 
+    // TODO move this to when its actually needed + save & restore old state
+    TCCR1 = 0;                  //stop the timer
+    TCNT1 = 0;                  //zero the timer
+    GTCCR = _BV(PSR1);          //reset the prescaler
+    OCR1A = 243;                //set the compare value
+    OCR1C = 243;
+    //TIMSK = _BV(OCIE1A);        //interrupt on Compare Match A
+    //start timer, ctc mode, prescaler clk/16384   
+    TCCR1 = _BV(CTC1) | _BV(CS10);
 
-    //TIMSK |= (1 << OCIE1A); // enable compare match interrupt
-    //TIMSK &= ~(1 << OCIE1A); // Disable COMPA interrupt
+    // TODO count overflows instead of compare matches
+    //TIFR = 1 << OCF0A;     // Clear output compare interrupt flag
 }
 
 uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
@@ -165,7 +170,7 @@ void USISerial::on_USI_overflow() {
             // Approximately 1ms at 9600 baud
             TCNT0 = oldTCNT0;
         #endif
-
+        
         state = READY;
         break;
 
@@ -270,8 +275,12 @@ void setup() {
     s->send(3, b, 1);
 }
 
+char b = 0;
+bool send = false;
+
 void loop() {
-    if(new_data) {
+    if(new_data && !send) {
+        send = true;
         new_data = false;
         digitalWrite(PB4, HIGH);
         delay(100);
@@ -279,6 +288,9 @@ void loop() {
         delay(100);
         //s->send(1, &received_byte, 1);
         s->send(2, measurement, 1);
+    }
+    else {
+            b++;
     }
 }
 
@@ -306,7 +318,7 @@ ISR(TIMER0_COMPA_vect)
 ISR(TIMER1_COMPA_vect)
 {
     measurement[0] += 1;
-    PORTB ^= (1 << PB3);  // toggle PB3 for debug
+    //PORTB ^= (1 << PB3);  // toggle PB3 for debug
 }
 
 #endif
