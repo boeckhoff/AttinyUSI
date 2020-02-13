@@ -12,6 +12,13 @@
 #include <sw_fifo.h>
 
 USISerial* s;
+char received_byte; 
+uint8_t byte_time;
+volatile bool new_data = false;
+
+volatile bool started_measuring = false;
+
+volatile char measurement[2] = {0};
 
 static uint8_t reverse_byte(uint8_t x)
 {
@@ -27,110 +34,121 @@ USISerial::USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, long _rgap, void 
     rgap = _rgap;
     receive_handler = _receive_handler;
     state = READY;
+    initialize_USI();
+}
+
+// Initialize USI for UART reception.
+void USISerial::initialize_USI()
+{
+    oldTCCR0B = TCCR0B;
+    oldTCCR0A = TCCR0A;
+    DDRB &= ~(1 << DDB0); // Set pin 0 to input
+    PORTB |= 1 << PB0;    // Enable internal pull-up on pin PB0
+    USICR = 0;            // Disable USI. GIFR = 1 << PCIF;     // Clear pin change interrupt flag.
+    GIMSK |= 1 << PCIE;   // Enable pin change interrupts
+    PCMSK |= 1 << PCINT0; // Enable pin change on pin PB0
+
+    // initialize timer1 for measuing byte-receive time
+    TCCR1 = 0;
+    TCCR1 |= (1 << CTC1);  // clear timer on compare match
+    TCCR1 |= (2 << CS10); //| (1 << CS10);// | (1 << CS10); //clock prescaler 256
+    OCR1C = 255; // compare match value 
+
+    //TIMSK |= (1 << OCIE1A); // enable compare match interrupt
+    //TIMSK &= ~(1 << OCIE1A); // Disable COMPA interrupt
 }
 
 uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
     switch(state) {
         case GAP:
             return 0;
-            break;
-        case RECEIVING:
-            break;
+        case RECEIVING: 
             return 1;
         case SENDING_START:
         case SENDING_MIDDLE:
         case SENDING_END:
         case SENDING_WRAPUP:
             return 2;
-            break;
     }
+
     // we have verified that send state is READY
     send_buffer = buffer;
     bytes_left_to_send = nbytes;
     state = SENDING_START;
-    check_send();
+
+    #ifdef ARDUINO
+        oldTCCR0B = TCCR0B;
+        oldTCCR0A = TCCR0A;
+        oldTCNT0 = TCNT0;
+    #endif
+
+    // Configure Timer0
+    TCCR0A = 2 << WGM00;    // CTC mode
+    TCCR0B = CLOCKSELECT;   // Set prescaler to clk or clk /8
+    GTCCR |= 1 << PSR0;     // Reset prescaler
+    OCR0A = FULL_BIT_TICKS; // Trigger every full bit width
+    TCNT0 = 0;              // Count up from 0
+
+    // Configure USI to send low start bit and 7 bits of data
+    USIDR = 0x00 |                                         // Start bit (low)
+            reverse_byte(*send_buffer) >> 1;                              // followed by first 7 bits of serial data
+    USICR = (1 << USIOIE) |                                // Enable USI Counter OVF interrupt.
+            (0 << USIWM1) | (1 << USIWM0) |                // Select three wire mode to ensure USI written to PB1
+            (0 << USICS1) | (1 << USICS0) | (0 << USICLK); // Select Timer0 Compare match as USI Clock source.
+    DDRB |= (1 << PB1);                                    // Configure USI_DO as output.
+    USISR = 1 << USIOIF |                                  // Clear USI overflow interrupt flag
+            (16 - 8);                                      // and set USI counter to count 8 bits
+
+    bits_left_to_send = 1;
+
+    state = SENDING_MIDDLE;
+
     return 3;
 }
 
-void USISerial::check_send() {
-    //is triggered by send() or interrupt that indicates we have send a buffer
+void USISerial::on_USI_overflow() {
+
 
     switch(state) {
 
     case SENDING_START:
+        break;
 
-        #ifdef ARDUINO
-            oldTCCR0B = TCCR0B;
-            oldTCCR0A = TCCR0A;
-            oldTCNT0 = TCNT0;
-        #endif
+    case SENDING_MIDDLE:
+        if(bits_left_to_send) {
+            // TODO maybe this is takin too long (the bit shifting)
 
-        // Configure Timer0
-        TCCR0A = 2<<WGM00;                      // CTC mode
-        TCCR0B = CLOCKSELECT;                   // Set prescaler to clk or clk /8
-        GTCCR |= 1 << PSR0;                     // Reset prescaler
-        OCR0A = FULL_BIT_TICKS;                 // Trigger every full bit width
-        TCNT0 = 0;                              // Count up from 0 
+            USIDR = reverse_byte(*send_buffer) << (8-bits_left_to_send) // send leftover bits
+                      | (1 << (7-bits_left_to_send));               // send stop bit(high)
 
-        // Configure USI to send low start bit and 7 bits of data
+            bytes_left_to_send -= 1;
 
-        USIDR = 0x00 |                                         // Start bit (low)
-                reverse_byte(*send_buffer) >> 1;               // followed by first 7 bits of serial data
-        USICR = (1 << USIOIE) |                                // Enable USI Counter OVF interrupt.
-                (0 << USIWM1) | (1 << USIWM0) |                // Select three wire mode to ensure USI written to PB1
-                (0 << USICS1) | (1 << USICS0) | (0 << USICLK); // Select Timer0 Compare match as USI Clock source.
-        DDRB |= (1 << PB1);                                    // Configure USI_DO as output.
-        USISR = 1 << USIOIF |                                  // Clear USI overflow interrupt flag
-                (16 - 8);                                      // and set USI counter to count 8 bits
+            if(bytes_left_to_send) {
+                send_buffer++;
+                USIDR |= (reverse_byte(*send_buffer) >> (bits_left_to_send + 2)); // send start bit and first n bits
 
-        bytes_left_to_send -= 1;
+                if(bits_left_to_send == 7) {
+                    bits_left_to_send = 0;
+                }
+                else {
+                    bits_left_to_send += 2;
+                }
+                USISR |= (16 - 8);           // set USI counter to count 8 bits
+            }
+            else {
+                USIDR |= (255 >> (bits_left_to_send));               // send stop bit(high)
+                USISR |= (16 - (bits_left_to_send + 1)); // set USI counter to count leftover bits + stopbit
+                state = SENDING_WRAPUP;
+            }
 
-        if(bytes_left_to_send) {
-            state = SENDING_MIDDLE;
         }
         else {
-            state = SENDING_END;
-        }
-        break;
-
-    if(bits_left) {
-        USIDR = reverse_byte(*send_buffer) << (8-bits_left);
-        USIDR |= (1 >> (6 - bits_left));
-        if(bytes_left_to_send) {
-            send_buffer++;
+            USIDR = 0x00 |                        // Start bit (low)
+                reverse_byte(*send_buffer) >> 1;  // followed by first 7 bits of serial data
+            USISR |= (16 - 8);           // set USI counter to count 8 bits
+            bits_left_to_send = 1;
             bytes_left_to_send -= 1;
-            USIDR |= reverse_byte(*send_buffer) >> (bits_left+2);
         }
-    }
-    else {
-    }
-    
-    case SENDING_MIDDLE:
-        // USIDR: [last bit][stop bit (high)][start bit(low)][first 5 bits of next byte]
-        USIDR = reverse_byte(*send_buffer) << 7; // last bit of previous byte
-        send_buffer++;
-        bytes_left_to_send -=1;
-        USIDR |= 0x40; // followed by stop bit (high)
-        USIDR |= reverse_byte(*send_buffer) >> 3; // followed by first 5 bits of next byte
-        USISR = 1 << USIOIF |       // Clear USI overflow interrupt flag
-                (16 - 8);           // and set USI counter to count 8 bits
-
-        if(!bytes_left_to_send) {
-            state = SENDING_END;
-        }
-        break;
-
-    case SENDING_:
-        // USIDR: [last 3 bits][stop bit (high)][start bit(low)][first 5 bits of next byte]
-
-
-    case SENDING_END:    
-        USIDR = reverse_byte(*send_buffer) << 5 // Send last 3 bits of data
-                | 0x7F;                      // and stop bits (high)
-        USISR = 1 << USIOIF |                // Clear USI overflow interrupt flag
-                (16 - (1 + (STOPBITS)));     // Set USI counter to send last data bit and stop bits
-        
-        state = SENDING_WRAPUP;
         break;
 
     case SENDING_WRAPUP:
@@ -150,33 +168,145 @@ void USISerial::check_send() {
 
         state = READY;
         break;
+
+    case RECEIVING:
+        received_byte = reverse_byte(USIBR);
+        USICR = 0; // Disable USI
+
+        //Restore old timer values
+        TCCR0A = oldTCCR0A;
+        TCCR0B = oldTCCR0B;
+        // Note Arduino millis() and micros() will loose the time it took us to receive a byte
+        // Approximately 1ms at 9600 baud
+        TCNT0 = oldTCNT0;
+
+        receive_handler(reverse_byte(received_byte));
+
+        GIFR = 1 << PCIF;   // Clear pin change interrupt flag.
+        GIMSK |= 1 << PCIE; // Enable pin change interrupts again
+        // We are still in the middle of bit 7 and if it is low we will get a pin change event
+        // for the stop bit, but we will ignore it because it is high
+        state = READY;
+        break;
     
     default:
         return;
     }
 }
 
-void receive_handler() {
+void USISerial::on_start_bit() {
+    // enable timer1 interrupt to start measuing byte time
+    if(started_measuring) {
+        TIMSK &= ~(1 << OCIE1A); // Disable COMPA interrupt
+        // the num of interrupts can now be found in tofs
+        measurement[1] = TCNT1;
+    }
+    else {
+        TIMSK |= (1 << OCIE1A); // enable compare match interrupt
+        TCNT1 = 0; //reset timer1
+        started_measuring = true;
+    }
 
+    // Prepare for receiving a byte
+    state = RECEIVING;
+
+    oldTCNT0 = TCNT0;      // Save old timer counter
+    GIMSK &= ~(1 << PCIE); // Disable pin change interrupts
+    TCCR0A = 2 << WGM00;   // CTC mode
+    TCCR0B = CLOCKSELECT;  // Set prescaler to clk or clk /8
+    GTCCR |= 1 << PSR0;    // Reset prescaler
+    OCR0A = TIMER_TICKS;   // Delay to the middle of start bit accounting for interrupt startup and code execution delay before timer start
+    TCNT0 = 0;             // Count up from 0
+    TIFR = 1 << OCF0A;     // Clear output compare interrupt flag
+    TIMSK |= 1 << OCIE0A;  // Enable output compare interrupt
+}
+
+void USISerial::on_timer_comp() {
+    // COMPA interrupt indicates middle of bit 0
+
+    // TODO: determine if we need to check if we are in state receiving
+    TIMSK &= ~(1 << OCIE0A); // Disable COMPA interrupt
+
+    if(s->state != RECEIVING) {
+        return;
+    }
+
+    byte_time += TCNT0;
+    TCNT0 = 0;               // Count up from 0
+    OCR0A = FULL_BIT_TICKS;  // Shift every bit width
+    // Enable USI OVF interrupt    
+    TIMSK &= ~(1 << OCIE0A); // Disable COMPA interrupt, and select Timer0 compare match as USI Clock source:
+    USICR = 1 << USIOIE | 0 << USIWM0 | 1 << USICS0;
+    // Clear Start condition interrupt flag, USI OVF flag, and set counter
+    USISR = 1 << USIOIF | /*1<<USISIF |*/ 8;
+}
+
+
+void receive_handler(uint8_t b) {
+    // CAUTION: is called in interrupt routine, process byte directly or store in buffer
+    // NO DELAYS
+    new_data = true;
 }
 
 void setup() {
+    // Tweak clock speed for 5V, comment out if running ATtiny at 3V
+    OSCCAL += 3;
+
     pinMode(1,HIGH);                // Configure USI_DO as output.
+    pinMode(PB4, OUTPUT);
+    pinMode(PB3, OUTPUT);
     digitalWrite(1,HIGH);           // Ensure serial output is high when idle
+    digitalWrite(PB4,LOW);           // Ensure serial output is high when idle
     delay(1000);
 
-    s = new USISerial(3,3, 1, &receive_handler);
-    char b[13] = "UUU456789112";
-    s->send(2, b, 1);
+    s = new USISerial(4,3, 1, &receive_handler);
+    char b[13] = "U23456789112";
+    /*
+    b[0] = 255;
+    b[1] = 0xC0;
+    b[2] = 255;
+    b[3] = 0xC0;
+    */
+    s->send(3, b, 1);
 }
 
 void loop() {
-
+    if(new_data) {
+        new_data = false;
+        digitalWrite(PB4, HIGH);
+        delay(100);
+        digitalWrite(PB4, LOW);
+        delay(100);
+        //s->send(1, &received_byte, 1);
+        s->send(2, measurement, 1);
+    }
 }
 
 ISR(USI_OVF_vect)
 {
-    s->check_send();
+    USISR = 1 << USIOIF; // clear interrupt flag
+    //PORTB ^= (1 << PB3);  // toggle PB3 for debug
+    s->on_USI_overflow();
+}
+
+ISR(PCINT0_vect)
+{
+    uint8_t pinbVal = PINB;      // Read directly as Arduino digitalRead is too slow
+    if (!(pinbVal & 1 << PINB0)) // Trigger only if DI is Low
+    {
+        s->on_start_bit();
+    }
+}
+
+ISR(TIMER0_COMPA_vect)
+{
+    s->on_timer_comp();
+}
+
+ISR(TIMER1_COMPA_vect)
+{
+    measurement[0] += 1;
+    PORTB ^= (1 << PB3);  // toggle PB3 for debug
 }
 
 #endif

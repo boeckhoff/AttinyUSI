@@ -51,13 +51,13 @@ class USISerial {
         uint8_t num_rbytes;
         uint8_t num_sbytes;
         long rgap;
-        void (*receive_handler)();
+        void (*receive_handler)(uint8_t);
 
         volatile uint8_t bytes_left_to_send;
+        volatile uint8_t bits_left_to_send;
         volatile char *send_buffer;
         volatile uint8_t cur_byte_to_send;
 
-        //TODO make volatile
         volatile USISERIAL_STATE state;
 
         #ifdef ARDUINO
@@ -68,7 +68,10 @@ class USISerial {
 
     public:
         USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, long _r_gap, void (*_receive_handler)());
+        void initialize_USI();
         uint8_t send(uint8_t nbytes, char *buffer, long gap);
         void block(long time);
-        void check_send();
+        void on_USI_overflow();
+        void on_start_bit();
+        void on_timer_comp();
 };
