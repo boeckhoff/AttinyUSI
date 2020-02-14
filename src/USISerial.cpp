@@ -20,6 +20,12 @@ volatile bool started_measuring = false;
 
 volatile char measurement[2] = {0};
 
+const uint8_t MESSAGE_LENGTH = 5;
+char message[MESSAGE_LENGTH] = {0};
+volatile uint8_t index = 0;
+
+uint8_t my_id = 255;
+
 static uint8_t reverse_byte(uint8_t x)
 {
     x = ((x >> 1) & 0x55) | ((x << 1) & 0xaa);
@@ -50,6 +56,9 @@ void USISerial::initialize_USI()
 
     // initialize timer1 for measuing byte-receive time
     // TODO move this to when its actually needed + save & restore old state
+    oldTCCR1 = TCCR1;
+    oldTCNT1 = TCNT1;
+
     TCCR1 = 0;                  //stop the timer
     TCNT1 = 0;                  //zero the timer
     GTCCR = _BV(PSR1);          //reset the prescaler
@@ -113,7 +122,6 @@ uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
 
 void USISerial::on_USI_overflow() {
 
-
     switch(state) {
 
     case SENDING_START:
@@ -141,18 +149,17 @@ void USISerial::on_USI_overflow() {
                 USISR |= (16 - 8);           // set USI counter to count 8 bits
             }
             else {
-                USIDR |= (255 >> (bits_left_to_send));               // send stop bit(high)
+                //USIDR |= (255 >> (bits_left_to_send));               // send stop bit(high)
                 USISR |= (16 - (bits_left_to_send + 1)); // set USI counter to count leftover bits + stopbit
+                bits_left_to_send = 0;
                 state = SENDING_WRAPUP;
             }
-
         }
         else {
             USIDR = 0x00 |                        // Start bit (low)
                 reverse_byte(*send_buffer) >> 1;  // followed by first 7 bits of serial data
             USISR |= (16 - 8);           // set USI counter to count 8 bits
             bits_left_to_send = 1;
-            bytes_left_to_send -= 1;
         }
         break;
 
@@ -185,7 +192,7 @@ void USISerial::on_USI_overflow() {
         // Approximately 1ms at 9600 baud
         TCNT0 = oldTCNT0;
 
-        receive_handler(reverse_byte(received_byte));
+        receive_handler();
 
         GIFR = 1 << PCIF;   // Clear pin change interrupt flag.
         GIMSK |= 1 << PCIE; // Enable pin change interrupts again
@@ -203,12 +210,14 @@ void USISerial::on_start_bit() {
     // enable timer1 interrupt to start measuing byte time
     if(started_measuring) {
         TIMSK &= ~(1 << OCIE1A); // Disable COMPA interrupt
-        // the num of interrupts can now be found in tofs
+
+        //restore old timer state
+        TCCR1 = oldTCCR1;
+        TCNT1 = oldTCNT1;
         measurement[1] = TCNT1;
     }
     else {
         TIMSK |= (1 << OCIE1A); // enable compare match interrupt
-        TCNT1 = 0; //reset timer1
         started_measuring = true;
     }
 
@@ -247,10 +256,16 @@ void USISerial::on_timer_comp() {
 }
 
 
-void receive_handler(uint8_t b) {
+void receive_handler() {
     // CAUTION: is called in interrupt routine, process byte directly or store in buffer
     // NO DELAYS
-    new_data = true;
+    message[index] = received_byte;
+    index++;
+
+    if(index == MESSAGE_LENGTH) {
+        new_data = true;
+        index = 0;
+    }
 }
 
 void setup() {
@@ -272,13 +287,11 @@ void setup() {
     b[2] = 255;
     b[3] = 0xC0;
     */
-    s->send(3, b, 1);
+    //s->send(8, b, 1);
 }
 
-char b = 0;
-bool send = false;
-
 void loop() {
+    /*
     if(new_data && !send) {
         send = true;
         new_data = false;
@@ -289,15 +302,29 @@ void loop() {
         //s->send(1, &received_byte, 1);
         s->send(2, measurement, 1);
     }
-    else {
-            b++;
+    */
+    if(new_data) {
+        new_data = false;
+        switch(message[0]) {
+            case 'R':
+                my_id = message[1];
+                message[1] += 1;
+                break;
+            case 'T':
+                if(message[1] == my_id) {
+                    message[2] = measurement[0];
+                    message[3] = measurement[1];
+                }
+                break;
+        }
+        s->send(MESSAGE_LENGTH, message, 1);
     }
 }
 
 ISR(USI_OVF_vect)
 {
+    PORTB ^= (1 << PB3);  // toggle PB3 for debug
     USISR = 1 << USIOIF; // clear interrupt flag
-    //PORTB ^= (1 << PB3);  // toggle PB3 for debug
     s->on_USI_overflow();
 }
 

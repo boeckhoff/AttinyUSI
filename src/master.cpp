@@ -30,7 +30,16 @@ void setup()
     message[2] = 0;
     message[3] = 0;
     message[4] = 0;
-    mySerial.write(message);
+    mySerial.write(message, MESSAGE_LENGTH);
+
+    delay(100);
+
+    message[0] = 'T';
+    message[1] = 0;
+    message[2] = 0;
+    message[3] = 0;
+    message[4] = 0;
+    mySerial.write(message, MESSAGE_LENGTH);
 }
 
 void loop() {

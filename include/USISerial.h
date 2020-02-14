@@ -51,7 +51,7 @@ class USISerial {
         uint8_t num_rbytes;
         uint8_t num_sbytes;
         long rgap;
-        void (*receive_handler)(uint8_t);
+        void (*receive_handler)();
 
         volatile uint8_t bytes_left_to_send;
         volatile uint8_t bits_left_to_send;
@@ -64,6 +64,9 @@ class USISerial {
             volatile uint8_t oldTCCR0A;
             volatile uint8_t oldTCCR0B;
             volatile uint8_t oldTCNT0;
+
+            volatile uint8_t oldTCCR1;
+            volatile uint8_t oldTCNT1;
         #endif
 
     public:
