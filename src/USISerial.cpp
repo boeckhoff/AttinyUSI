@@ -14,17 +14,26 @@
 USISerial* s;
 char received_byte; 
 uint8_t byte_time;
+
+const bool FIRST_UNIT = false;
+
 volatile bool new_data = false;
 
 volatile bool started_measuring = false;
 
 volatile char measurement[2] = {0};
 
+volatile bool just_received = false;
+
 const uint8_t MESSAGE_LENGTH = 5;
 char message[MESSAGE_LENGTH] = {0};
 volatile uint8_t index = 0;
 
 uint8_t my_id = 255;
+volatile bool next_wrapup = false;
+
+volatile char USISR_buffer;
+volatile char USIDR_buffer;
 
 static uint8_t reverse_byte(uint8_t x)
 {
@@ -104,18 +113,19 @@ uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
     TCNT0 = 0;              // Count up from 0
 
     // Configure USI to send low start bit and 7 bits of data
-    USIDR = 0x00 |                                         // Start bit (low)
+    USIDR_buffer = 0x00 |                                         // Start bit (low)
             reverse_byte(*send_buffer) >> 1;                              // followed by first 7 bits of serial data
     USICR = (1 << USIOIE) |                                // Enable USI Counter OVF interrupt.
             (0 << USIWM1) | (1 << USIWM0) |                // Select three wire mode to ensure USI written to PB1
             (0 << USICS1) | (1 << USICS0) | (0 << USICLK); // Select Timer0 Compare match as USI Clock source.
     DDRB |= (1 << PB1);                                    // Configure USI_DO as output.
-    USISR = 1 << USIOIF |                                  // Clear USI overflow interrupt flag
+    USISR_buffer = 1 << USIOIF |                                  // Clear USI overflow interrupt flag
             (16 - 8);                                      // and set USI counter to count 8 bits
 
     bits_left_to_send = 1;
 
     state = SENDING_MIDDLE;
+    on_USI_overflow();
 
     return 3;
 }
@@ -128,17 +138,24 @@ void USISerial::on_USI_overflow() {
         break;
 
     case SENDING_MIDDLE:
+        USIDR = USIDR_buffer;
+        USISR = USISR_buffer;
+        if(next_wrapup) {
+            state = SENDING_WRAPUP;
+            break;
+        }
+
         if(bits_left_to_send) {
             // TODO maybe this is takin too long (the bit shifting)
 
-            USIDR = reverse_byte(*send_buffer) << (8-bits_left_to_send) // send leftover bits
+            USIDR_buffer = reverse_byte(*send_buffer) << (8-bits_left_to_send) // send leftover bits
                       | (1 << (7-bits_left_to_send));               // send stop bit(high)
 
             bytes_left_to_send -= 1;
 
             if(bytes_left_to_send) {
                 send_buffer++;
-                USIDR |= (reverse_byte(*send_buffer) >> (bits_left_to_send + 2)); // send start bit and first n bits
+                USIDR_buffer |= (reverse_byte(*send_buffer) >> (bits_left_to_send + 2)); // send start bit and first n bits
 
                 if(bits_left_to_send == 7) {
                     bits_left_to_send = 0;
@@ -146,19 +163,19 @@ void USISerial::on_USI_overflow() {
                 else {
                     bits_left_to_send += 2;
                 }
-                USISR |= (16 - 8);           // set USI counter to count 8 bits
+                USISR_buffer |= (16 - 8);           // set USI counter to count 8 bits
             }
             else {
                 //USIDR |= (255 >> (bits_left_to_send));               // send stop bit(high)
-                USISR |= (16 - (bits_left_to_send + 1)); // set USI counter to count leftover bits + stopbit
+                USISR_buffer |= (16 - (bits_left_to_send + 1)); // set USI counter to count leftover bits + stopbit
                 bits_left_to_send = 0;
-                state = SENDING_WRAPUP;
+                next_wrapup = true;
             }
         }
         else {
-            USIDR = 0x00 |                        // Start bit (low)
+            USIDR_buffer = 0x00 |                        // Start bit (low)
                 reverse_byte(*send_buffer) >> 1;  // followed by first 7 bits of serial data
-            USISR |= (16 - 8);           // set USI counter to count 8 bits
+            USISR_buffer |= (16 - 8);           // set USI counter to count 8 bits
             bits_left_to_send = 1;
         }
         break;
@@ -179,6 +196,7 @@ void USISerial::on_USI_overflow() {
         #endif
         
         state = READY;
+        next_wrapup = false;
         break;
 
     case RECEIVING:
@@ -208,6 +226,10 @@ void USISerial::on_USI_overflow() {
 
 void USISerial::on_start_bit() {
     // enable timer1 interrupt to start measuing byte time
+    if(just_received && !FIRST_UNIT) {
+        just_received = false;
+        return;
+    }
     if(started_measuring) {
         TIMSK &= ~(1 << OCIE1A); // Disable COMPA interrupt
 
@@ -264,6 +286,7 @@ void receive_handler() {
 
     if(index == MESSAGE_LENGTH) {
         new_data = true;
+        just_received = true;
         index = 0;
     }
 }
@@ -316,6 +339,10 @@ void loop() {
                     message[3] = measurement[1];
                 }
                 break;
+            case 'L':
+                if(message[1] == my_id) {
+                    PORTB ^= (1 << PB3);  // toggle PB3 for debug
+                }
         }
         s->send(MESSAGE_LENGTH, message, 1);
     }
@@ -323,7 +350,7 @@ void loop() {
 
 ISR(USI_OVF_vect)
 {
-    PORTB ^= (1 << PB3);  // toggle PB3 for debug
+    //PORTB ^= (1 << PB3);  // toggle PB3 for debug
     USISR = 1 << USIOIF; // clear interrupt flag
     s->on_USI_overflow();
 }
