@@ -10,8 +10,8 @@
 #include "Arduino.h"
 
 void setup() {
-    pinMode(PB3, OUTPUT);
-    //OSCCAL -= 8;                // User calibration
+    pinMode(PB3, OUTPUT)
+    OSCCAL -= 5;                // User calibration
     TCCR1 = 0;
     TCCR1 |= (1 << CTC1);  // clear timer on compare match
     TCCR1 |= (1 << CS12) | (1 << CS11) | (1 << CS10); //clock prescaler 8192

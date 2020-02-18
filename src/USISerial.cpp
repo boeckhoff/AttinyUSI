@@ -15,9 +15,13 @@ USISerial* s;
 char received_byte; 
 uint8_t byte_time;
 
-const bool FIRST_UNIT = false;
+volatile uint8_t steps = 0;
+
+const bool FIRST_UNIT = true;
 
 volatile bool new_data = false;
+
+volatile char last_bit;
 
 volatile bool started_measuring = false;
 
@@ -111,6 +115,21 @@ uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
     GTCCR |= 1 << PSR0;     // Reset prescaler
     OCR0A = FULL_BIT_TICKS; // Trigger every full bit width
     TCNT0 = 0;              // Count up from 0
+    
+    // Configure timer1 to fix spike
+    oldTCCR1 = TCCR1;
+    oldTCNT1 = TCNT1;
+
+    steps = 0;
+    TCCR1 = 0;                  //stop the timer
+    TCNT1 = 0;                  //zero the timer
+    GTCCR = _BV(PSR1);          //reset the prescaler
+    OCR1A = FULL_BIT_TICKS;                //set the compare value
+    OCR1C = FULL_BIT_TICKS;
+    //TIMSK = _BV(OCIE1A);        //interrupt on Compare Match A
+    //start timer, ctc mode, prescaler clk/16384   
+    TCCR1 = _BV(CTC1) | _BV(CS10);
+    TIMSK |= (1 << OCIE1A); // enable compare match interrupt
 
     // Configure USI to send low start bit and 7 bits of data
     USIDR_buffer = 0x00 |                                         // Start bit (low)
@@ -140,14 +159,20 @@ void USISerial::on_USI_overflow() {
     case SENDING_MIDDLE:
         USIDR = USIDR_buffer;
         USISR = USISR_buffer;
+
+        last_bit = USIDR_buffer & 0x01;
+        USICR |= (1 << USIWM0); // Select three wire mode to ensure USI written to PB1
+
+        steps = 0;
+        TIMSK |= (1 << OCIE1A); // enable compare match interrupt
+        //PORTB ^= (1 << PB3);  // toggle PB3 for debug
+
         if(next_wrapup) {
             state = SENDING_WRAPUP;
             break;
         }
 
         if(bits_left_to_send) {
-            // TODO maybe this is takin too long (the bit shifting)
-
             USIDR_buffer = reverse_byte(*send_buffer) << (8-bits_left_to_send) // send leftover bits
                       | (1 << (7-bits_left_to_send));               // send stop bit(high)
 
@@ -166,6 +191,7 @@ void USISerial::on_USI_overflow() {
                 USISR_buffer |= (16 - 8);           // set USI counter to count 8 bits
             }
             else {
+                USIDR_buffer |= (1 << (6-bits_left_to_send));
                 //USIDR |= (255 >> (bits_left_to_send));               // send stop bit(high)
                 USISR_buffer |= (16 - (bits_left_to_send + 1)); // set USI counter to count leftover bits + stopbit
                 bits_left_to_send = 0;
@@ -181,6 +207,13 @@ void USISerial::on_USI_overflow() {
         break;
 
     case SENDING_WRAPUP:
+        //reset timer1
+        TIMSK &= ~(1 << OCIE1A); // Disable COMPA interrupt
+
+        //restore old timer state
+        TCCR1 = oldTCCR1;
+        TCNT1 = oldTCNT1;
+
         PORTB |= 1 << PB1;    // Ensure output is high
         DDRB |= (1 << PB1);   // Configure USI_DO as output.
         USICR = 0;            // Disable USI.
@@ -225,7 +258,7 @@ void USISerial::on_USI_overflow() {
 }
 
 void USISerial::on_start_bit() {
-    // enable timer1 interrupt to start measuing byte time
+    // enable timer1 interrupt to start measuring byte time
     if(just_received && !FIRST_UNIT) {
         just_received = false;
         return;
@@ -251,7 +284,7 @@ void USISerial::on_start_bit() {
     TCCR0A = 2 << WGM00;   // CTC mode
     TCCR0B = CLOCKSELECT;  // Set prescaler to clk or clk /8
     GTCCR |= 1 << PSR0;    // Reset prescaler
-    OCR0A = TIMER_TICKS;   // Delay to the middle of start bit accounting for interrupt startup and code execution delay before timer start
+    OCR0A = TIMER_TICKS;   // Set compare value to middle of start bit
     TCNT0 = 0;             // Count up from 0
     TIFR = 1 << OCF0A;     // Clear output compare interrupt flag
     TIMSK |= 1 << OCIE0A;  // Enable output compare interrupt
@@ -263,7 +296,7 @@ void USISerial::on_timer_comp() {
     // TODO: determine if we need to check if we are in state receiving
     TIMSK &= ~(1 << OCIE0A); // Disable COMPA interrupt
 
-    if(s->state != RECEIVING) {
+    if(state != RECEIVING) {
         return;
     }
 
@@ -293,7 +326,7 @@ void receive_handler() {
 
 void setup() {
     // Tweak clock speed for 5V, comment out if running ATtiny at 3V
-    OSCCAL += 3;
+    //OSCCAL += 3;
 
     pinMode(1,HIGH);                // Configure USI_DO as output.
     pinMode(PB4, OUTPUT);
@@ -303,14 +336,15 @@ void setup() {
     delay(1000);
 
     s = new USISerial(4,3, 1, &receive_handler);
-    char b[13] = "U23456789112";
+    //char b[13] = "U23456789112";
+    char b[5] = {0,0,0,0,0};//{(char)254,(char)254,(char)254,(char)254,(char)254};
     /*
     b[0] = 255;
     b[1] = 0xC0;
     b[2] = 255;
     b[3] = 0xC0;
     */
-    //s->send(8, b, 1);
+    //s->send(5, b, 1);
 }
 
 void loop() {
@@ -332,19 +366,27 @@ void loop() {
             case 'R':
                 my_id = message[1];
                 message[1] += 1;
+                s->send(MESSAGE_LENGTH, message, 1);
                 break;
             case 'T':
                 if(message[1] == my_id) {
                     message[2] = measurement[0];
                     message[3] = measurement[1];
                 }
+                s->send(MESSAGE_LENGTH, message, 1);
                 break;
             case 'L':
                 if(message[1] == my_id) {
                     PORTB ^= (1 << PB3);  // toggle PB3 for debug
                 }
+                else {
+                    s->send(MESSAGE_LENGTH, message, 1);
+                }
+                break;
+            default:
+                    s->send(MESSAGE_LENGTH, message, 1);
+                break;
         }
-        s->send(MESSAGE_LENGTH, message, 1);
     }
 }
 
@@ -371,8 +413,26 @@ ISR(TIMER0_COMPA_vect)
 
 ISR(TIMER1_COMPA_vect)
 {
-    measurement[0] += 1;
-    //PORTB ^= (1 << PB3);  // toggle PB3 for debug
+    if(s->state == RECEIVING) {
+        measurement[0] += 1;
+    }
+    else {
+        if(steps == 56) {
+            //PORTB ^= (1 << PB3);  // toggle PB3 for debug
+            TIMSK &= ~(1 << OCIE1A); // disable compare match interrupt
+
+            if(last_bit) {
+                PORTB|= (1 << PB1);  // pull pb0 high
+            }
+            else {
+                PORTB&= ~(1 << PB1);  // pull pb0 low
+            }
+            USICR&= ~(1 << USIWM1);
+            USICR&= ~(1 << USIWM0);
+
+        }
+        steps ++;
+    }
 }
 
 #endif

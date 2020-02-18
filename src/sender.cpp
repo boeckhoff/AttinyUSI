@@ -163,7 +163,7 @@ void setup() {
 }
 
 void loop() {
-    char message[] = "USI";
+    char message[] ={0,0,0,0}; 
     uint8_t len = sizeof(message)-1;
     for (uint8_t i = 0; i<len; i++)
     {

@@ -58,7 +58,6 @@ class USISerial {
         volatile char *send_buffer;
         volatile uint8_t cur_byte_to_send;
 
-        volatile USISERIAL_STATE state;
 
         #ifdef ARDUINO
             volatile uint8_t oldTCCR0A;
@@ -70,6 +69,8 @@ class USISerial {
         #endif
 
     public:
+        //TODO make privat
+        volatile USISERIAL_STATE state;
         USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, long _r_gap, void (*_receive_handler)());
         void initialize_USI();
         uint8_t send(uint8_t nbytes, char *buffer, long gap);
