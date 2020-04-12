@@ -1,3 +1,5 @@
+/* test script to tune frequency*/
+
 #ifdef __INTELLISENSE__
 #define TEST
 #endif

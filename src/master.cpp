@@ -15,16 +15,19 @@ const uint8_t MESSAGE_LENGTH = 5;
 char message[MESSAGE_LENGTH];
 
 #define BAUD_RATE 9600
+#define F_CPU 8000000
 
 #define CYCLES_PER_BIT 833
 
+
+// declare the messages to be send
 char messages[7][MESSAGE_LENGTH] = {
-    {'R',0,0,0,0},
-    {'T',0,0,0,0},
-    {'T',1,0,0,0},
-    {'T',2,0,0,0},
-    {'T',3,0,0,0},
-    {'L',3,0,0,0},
+    {'R',0,0,0,0}, // register all units with IDs
+    {'T',0,0,0,0}, // get byte timing information from unit 0
+    {'T',1,0,0,0}, // get byte timing information from unit 0
+    {'T',2,0,0,0}, // get byte timing information from unit 0
+    {'T',3,0,0,0}, // get byte timing information from unit 0
+    {'L',3,0,0,0}, // 
     {'L',0,0,0,0},
 };
 
@@ -45,24 +48,6 @@ void setup()
     pinMode(3, INPUT_PULLUP);
 
     delay(100);
-
-    message[0] = 'R';
-    message[1] = 0;
-    message[2] = 0;
-    message[3] = 0;
-    message[4] = 0;
-    /*
-    mySerial.write(message, MESSAGE_LENGTH);
-
-    delay(100);
-
-    message[0] = 'T';
-    message[1] = 0;
-    message[2] = 0;
-    message[3] = 0;
-    message[4] = 0;
-    mySerial.write(message, MESSAGE_LENGTH);
-    */
 }
 
 char incomingByte;
@@ -75,43 +60,20 @@ void loop() {
             mySerial.write(messages[message_index],MESSAGE_LENGTH);
         }
         else { //timed message
-            Serial.println("timed message");
             double d = 0.0;
 
-            double prevByteTime = 10.0/9600.0;
+            double prevByteTime = 10.0/(double)BAUD_RATE;
             double curByteTime = 0.0;
             double curByteBelief = 0.0;
             
             for(uint8_t i = 0; i<messages[message_index][1]; ++i) {
-                Serial.println("i");
-
-                Serial.println("clockCycles");
-                Serial.println((float)clock_cycles[i]);
-                curByteBelief = (double)clock_cycles[i]/8000000.0;
-                Serial.println("curByteBelief");
-                Serial.println(curByteBelief, 8);
-
-                Serial.println("ratio");
-                Serial.println(((prevByteTime - curByteBelief)/curByteBelief), 8);
-
+                curByteBelief = (double)clock_cycles[i]/(double)F_CPU;
                 curByteTime = prevByteTime + (((prevByteTime - curByteBelief)/curByteBelief) * prevByteTime);
-
-                Serial.println("curByteTime");
-                Serial.println(curByteTime, 8);
-                
                 prevByteTime = curByteTime;
-                Serial.println("adding:");
-                Serial.println(curByteTime*(double)MESSAGE_LENGTH, 8);
-
-                Serial.println("cur d:");
-                Serial.println(d, 8);
                 d += curByteTime*(double)MESSAGE_LENGTH;
             }
 
-            d -= (10.0/9600.0)*MESSAGE_LENGTH;
-
-            Serial.print("delay ");
-            Serial.println(d*1000.0);
+            d -= (10.0/(double)BAUD_RATE)*MESSAGE_LENGTH;
 
             mySerial.write(messages[message_index],MESSAGE_LENGTH);
             delay(d*1000.0);
@@ -162,7 +124,7 @@ void loop() {
             num_devices = message[1];
         }
         if(message[0] == 84) {
-            clock_cycles[message[1]] = 8300;//message[2]*243+message[3];
+            clock_cycles[message[1]] = message[2]*243+message[3];
             Serial.print((uint8_t)message[1]);
             Serial.print(" ");
             Serial.println(clock_cycles[message[1]]);

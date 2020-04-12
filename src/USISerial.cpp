@@ -325,9 +325,6 @@ void receive_handler() {
 }
 
 void setup() {
-    // Tweak clock speed for 5V, comment out if running ATtiny at 3V
-    //OSCCAL += 3;
-
     pinMode(1,HIGH);                // Configure USI_DO as output.
     pinMode(PB4, OUTPUT);
     pinMode(PB3, OUTPUT);
@@ -336,15 +333,6 @@ void setup() {
     delay(1000);
 
     s = new USISerial(4,3, 1, &receive_handler);
-    //char b[13] = "U23456789112";
-    char b[5] = {0,0,0,0,0};//{(char)254,(char)254,(char)254,(char)254,(char)254};
-    /*
-    b[0] = 255;
-    b[1] = 0xC0;
-    b[2] = 255;
-    b[3] = 0xC0;
-    */
-    //s->send(5, b, 1);
 }
 
 void loop() {
@@ -364,18 +352,21 @@ void loop() {
         new_data = false;
         switch(message[0]) {
             case 'R':
+                // Register -> save ID and pass on ID+1  
                 my_id = message[1];
                 message[1] += 1;
                 s->send(MESSAGE_LENGTH, message, 1);
                 break;
             case 'T':
-                if(message[1] == my_id) {
+                // Time -> if ID matches send timing information for byte
+                if(message[1] == my_id) { 
                     message[2] = measurement[0];
                     message[3] = measurement[1];
                 }
                 s->send(MESSAGE_LENGTH, message, 1);
                 break;
             case 'L':
+                // Light -> if ID matches toggle LED
                 if(message[1] == my_id) {
                     PORTB ^= (1 << PB3);  // toggle PB3 for debug
                 }
@@ -384,6 +375,7 @@ void loop() {
                 }
                 break;
             default:
+                // pass on all other messages
                     s->send(MESSAGE_LENGTH, message, 1);
                 break;
         }
@@ -417,7 +409,7 @@ ISR(TIMER1_COMPA_vect)
         measurement[0] += 1;
     }
     else {
-        if(steps == 56) {
+        if(steps == TIMER_CYCLES_TO_USI_OVERFLOW) {
             //PORTB ^= (1 << PB3);  // toggle PB3 for debug
             TIMSK &= ~(1 << OCIE1A); // disable compare match interrupt
 

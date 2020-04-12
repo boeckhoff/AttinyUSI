@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#define TIMER_CYCLES_TO_USI_OVERFLOW 56
+
 #define BAUDRATE 9600
 #define STOPBITS 1
 // F_CPU defined by Arduino, e.g. 1000000, 8000000, 16000000
