@@ -27,8 +27,8 @@ char messages[7][MESSAGE_LENGTH] = {
     {'T',1,0,0,0}, // get byte timing information from unit 0
     {'T',2,0,0,0}, // get byte timing information from unit 0
     {'T',3,0,0,0}, // get byte timing information from unit 0
-    {'L',3,0,0,0}, // 
-    {'L',0,0,0,0},
+    {'L',3,0,0,0}, // light up unit 3
+    {'L',0,0,0,0}, // light up unit 0
 };
 
 uint16_t clock_cycles[4] = {0};
