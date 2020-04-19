@@ -1,3 +1,5 @@
+/*  USI UART daisy-chain communication for ATtiny85 */
+
 #ifdef __INTELLISENSE__
 #define USISERIAL
 #endif
@@ -15,30 +17,6 @@ USISerial* s;
 char received_byte; 
 uint8_t byte_time;
 
-volatile uint8_t steps = 0;
-
-const bool FIRST_UNIT = true;
-
-volatile bool new_data = false;
-
-volatile char last_bit;
-
-volatile bool started_measuring = false;
-
-volatile char measurement[2] = {0};
-
-volatile bool just_received = false;
-
-const uint8_t MESSAGE_LENGTH = 5;
-char message[MESSAGE_LENGTH] = {0};
-volatile uint8_t index = 0;
-
-uint8_t my_id = 255;
-volatile bool next_wrapup = false;
-
-volatile char USISR_buffer;
-volatile char USIDR_buffer;
-
 static uint8_t reverse_byte(uint8_t x)
 {
     x = ((x >> 1) & 0x55) | ((x << 1) & 0xaa);
@@ -47,10 +25,12 @@ static uint8_t reverse_byte(uint8_t x)
     return x;
 }
 
-USISerial::USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, long _rgap, void (*_receive_handler)()) { 
+USISerial::USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, uint8_t _rgap, void (*_receive_handler)()) { 
     num_rbytes = _num_rbytes;
     num_sbytes = _num_sbytes;
-    rgap = _rgap;
+    rgap = (_rgap*1024)/CYCLES_PER_BIT; // user gives rgap in BIT_LENGTH time,
+                                        // we use this value to set an interrupt
+                                        // for a timer1 with 1024 prescaler
     receive_handler = _receive_handler;
     state = READY;
     initialize_USI();
@@ -77,25 +57,22 @@ void USISerial::initialize_USI()
     GTCCR = _BV(PSR1);          //reset the prescaler
     OCR1A = 243;                //set the compare value
     OCR1C = 243;
-    //TIMSK = _BV(OCIE1A);        //interrupt on Compare Match A
-    //start timer, ctc mode, prescaler clk/16384   
     TCCR1 = _BV(CTC1) | _BV(CS10);
 
     // TODO count overflows instead of compare matches
-    //TIFR = 1 << OCF0A;     // Clear output compare interrupt flag
 }
 
 uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
     switch(state) {
         case GAP:
-            return 0;
+            return 1; //sending not allowed due to user-defined gap
         case RECEIVING: 
-            return 1;
+            return 2;
         case SENDING_START:
         case SENDING_MIDDLE:
         case SENDING_END:
         case SENDING_WRAPUP:
-            return 2;
+            return 3;
     }
 
     // we have verified that send state is READY
@@ -146,7 +123,7 @@ uint8_t USISerial::send(uint8_t nbytes, char *buffer, long gap) {
     state = SENDING_MIDDLE;
     on_USI_overflow();
 
-    return 3;
+    return 0; //return 0 for sending success
 }
 
 void USISerial::on_USI_overflow() {
@@ -219,6 +196,18 @@ void USISerial::on_USI_overflow() {
         USICR = 0;            // Disable USI.
         USISR |= 1 << USIOIF; // clear interrupt flag
 
+        if(rgap != 0) {
+            TCCR1 = 0;                  //stop the timer
+            TCNT1 = 0;                  //zero the timer
+            GTCCR = _BV(PSR1);          //reset the prescaler
+            OCR1A = rgap;                //set the compare value
+            OCR1C = rgap;
+
+            TIMSK = _BV(OCIE1A);        //interrupt on Compare Match A
+            //start timer, ctc mode, prescaler clk/16384   
+            TCCR1 = _BV(CTC1) | _BV(CS10) | _BV(CS11) | _BV(CS13); //set prescaler to 1024
+        }
+
         //Restore old timer values for Arduino
         #ifdef ARDUINO
             TCCR0A = oldTCCR0A;
@@ -259,7 +248,7 @@ void USISerial::on_USI_overflow() {
 
 void USISerial::on_start_bit() {
     // enable timer1 interrupt to start measuring byte time
-    if(just_received && !FIRST_UNIT) {
+    if(just_received) {
         just_received = false;
         return;
     }
@@ -312,7 +301,7 @@ void USISerial::on_timer_comp() {
 
 
 void receive_handler() {
-    // CAUTION: is called in interrupt routine, process byte directly or store in buffer
+    // CAUTION: is called in ISR, process byte directly or store in buffer
     // NO DELAYS
     message[index] = received_byte;
     index++;
@@ -325,29 +314,17 @@ void receive_handler() {
 }
 
 void setup() {
-    pinMode(1,HIGH);                // Configure USI_DO as output.
+    pinMode(1,HIGH);         // Configure USI_DO as output.
     pinMode(PB4, OUTPUT);
     pinMode(PB3, OUTPUT);
-    digitalWrite(1,HIGH);           // Ensure serial output is high when idle
-    digitalWrite(PB4,LOW);           // Ensure serial output is high when idle
+    digitalWrite(1,HIGH);    // Ensure serial output is high when idle
+    digitalWrite(PB4,LOW);   // Ensure serial output is high when idle
     delay(1000);
 
     s = new USISerial(4,3, 1, &receive_handler);
 }
 
 void loop() {
-    /*
-    if(new_data && !send) {
-        send = true;
-        new_data = false;
-        digitalWrite(PB4, HIGH);
-        delay(100);
-        digitalWrite(PB4, LOW);
-        delay(100);
-        //s->send(1, &received_byte, 1);
-        s->send(2, measurement, 1);
-    }
-    */
     if(new_data) {
         new_data = false;
         switch(message[0]) {
@@ -368,7 +345,7 @@ void loop() {
             case 'L':
                 // Light -> if ID matches toggle LED
                 if(message[1] == my_id) {
-                    PORTB ^= (1 << PB3);  // toggle PB3 for debug
+                    PORTB ^= (1 << PB3);
                 }
                 else {
                     s->send(MESSAGE_LENGTH, message, 1);
@@ -384,14 +361,13 @@ void loop() {
 
 ISR(USI_OVF_vect)
 {
-    //PORTB ^= (1 << PB3);  // toggle PB3 for debug
     USISR = 1 << USIOIF; // clear interrupt flag
     s->on_USI_overflow();
 }
 
 ISR(PCINT0_vect)
 {
-    uint8_t pinbVal = PINB;      // Read directly as Arduino digitalRead is too slow
+    uint8_t pinbVal = PINB;
     if (!(pinbVal & 1 << PINB0)) // Trigger only if DI is Low
     {
         s->on_start_bit();
@@ -407,24 +383,27 @@ ISR(TIMER1_COMPA_vect)
 {
     if(s->state == RECEIVING) {
         measurement[0] += 1;
+        return;
     }
-    else {
-        if(steps == TIMER_CYCLES_TO_USI_OVERFLOW) {
-            //PORTB ^= (1 << PB3);  // toggle PB3 for debug
-            TIMSK &= ~(1 << OCIE1A); // disable compare match interrupt
+    if(s->state == GAP) {
+        s->state = READY;
+        return;
+    }
 
-            if(last_bit) {
-                PORTB|= (1 << PB1);  // pull pb0 high
-            }
-            else {
-                PORTB&= ~(1 << PB1);  // pull pb0 low
-            }
-            USICR&= ~(1 << USIWM1);
-            USICR&= ~(1 << USIWM0);
+    if(steps == TIMER_CYCLES_TO_USI_OVERFLOW) {
+        //PORTB ^= (1 << PB3);  // toggle PB3 for debug
+        TIMSK &= ~(1 << OCIE1A); // disable compare match interrupt
 
+        if(last_bit) {
+            PORTB|= (1 << PB1);  // pull pb0 high
         }
-        steps ++;
-    }
+        else {
+            PORTB&= ~(1 << PB1);  // pull pb0 low
+        }
+        USICR&= ~(1 << USIWM1);
+        USICR&= ~(1 << USIWM0);
+        }
+    steps ++;
 }
 
 #endif

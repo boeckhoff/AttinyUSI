@@ -1,3 +1,5 @@
+/*  USI UART daisy-chain communication for ATtiny85 */
+
 #include <stdint.h>
 
 #define TIMER_CYCLES_TO_USI_OVERFLOW 56
@@ -37,6 +39,25 @@
 #define TIMER_TICKS 1
 #endif
 
+volatile uint8_t steps = 0;
+
+volatile bool new_data = false;
+volatile char last_bit;
+volatile bool started_measuring = false;
+volatile char measurement[2] = {0};
+volatile bool just_received = false;
+
+const uint8_t MESSAGE_LENGTH = 5;
+char message[MESSAGE_LENGTH] = {0};
+volatile uint8_t index = 0;
+
+uint8_t my_id = 255; // set UINT8_MAX as default/undefined because 0 is valid ID
+volatile bool next_wrapup = false;
+
+volatile char USISR_buffer;
+volatile char USIDR_buffer;
+
+
 enum USISERIAL_STATE {
     READY,
     RECEIVING,
@@ -52,7 +73,7 @@ class USISerial {
     private:
         uint8_t num_rbytes;
         uint8_t num_sbytes;
-        long rgap;
+        uint8_t rgap; // 1 equals 1024 CPU cycles
         void (*receive_handler)();
 
         volatile uint8_t bytes_left_to_send;
@@ -71,12 +92,11 @@ class USISerial {
         #endif
 
     public:
-        //TODO make privat
+        //TODO make privat where appropriate
         volatile USISERIAL_STATE state;
-        USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, long _r_gap, void (*_receive_handler)());
+        USISerial(uint8_t _num_rbytes, uint8_t _num_sbytes, uint8_t _r_gap, void (*_receive_handler)());
         void initialize_USI();
         uint8_t send(uint8_t nbytes, char *buffer, long gap);
-        void block(long time);
         void on_USI_overflow();
         void on_start_bit();
         void on_timer_comp();

@@ -1,3 +1,10 @@
+/*  
+    proof of concept code for full-duplex capable master unit
+    (arduino-nano) to register all units, request, receive 
+    and progress byte-timings from all units and send 
+    timed messages to trigger 2 units at the same time
+    based on the previously collected information
+*/
 
 #ifdef __INTELLISENSE__
 #define MASTER
@@ -19,7 +26,6 @@ char message[MESSAGE_LENGTH];
 
 #define CYCLES_PER_BIT 833
 
-
 // declare the messages to be send
 char messages[7][MESSAGE_LENGTH] = {
     {'R',0,0,0,0}, // register all units with IDs
@@ -29,6 +35,7 @@ char messages[7][MESSAGE_LENGTH] = {
     {'T',3,0,0,0}, // get byte timing information from unit 0
     {'L',3,0,0,0}, // light up unit 3
     {'L',0,0,0,0}, // light up unit 0
+    // unit 3 and 0 will ligt up at the same time
 };
 
 uint16_t clock_cycles[4] = {0};
@@ -78,17 +85,6 @@ void loop() {
             mySerial.write(messages[message_index],MESSAGE_LENGTH);
             delay(d*1000.0);
             mySerial.write(messages[message_index+1],MESSAGE_LENGTH);
-
-
-            /*
-            for(uint8_t i = 0; i<messages[message_index][1]; ++i) {
-                Serial.print("clock cycles: ");
-                d+= (10.0/9600.0)*(8000.0/(float)clock_cycles[i])*MESSAGE_LENGTH;
-                Serial.print(clock_cycles[i]);
-            }
-            d -= (10.0/9600.0)*MESSAGE_LENGTH;
-            */
-
         }
 
         message_index++;
@@ -120,16 +116,15 @@ void loop() {
         Serial.print(" ");
         Serial.print((uint8_t)message[4]);
         Serial.println(" ");
-        if(message[0] == 82) {
+        if(message[0] == 82) { // first character ASCII 82 = "R" indicates registration
             num_devices = message[1];
         }
-        if(message[0] == 84) {
+        if(message[0] == 84) { // first character ASCII 84 = "T" indicates byte-timing value
             clock_cycles[message[1]] = message[2]*243+message[3];
             Serial.print((uint8_t)message[1]);
             Serial.print(" ");
             Serial.println(clock_cycles[message[1]]);
         }
-
     }
 }
 

@@ -1,11 +1,11 @@
 /* 
 basic USI Serial echo implementation with fifo buffer based on
-https://github.com/MarkOsborne/becomingmaker/USISerialSend & USISerial
+https://github.com/MarkOsborne/becomingmaker/USISerialSend  (send)
+https://github.com/MarkOsborne/becomingmaker/USISerial      (receive)
 aswell as Atmel app note AVR307
 http://www.atmel.com/Images/doc4300.pdf
 and a template fifo buffer implementation by digikey
 https://www.digikey.com/eewiki/display/microcontroller/Software+FIFO+Buffer+for+UART+Communication
-
 */
 
 #ifdef __INTELLISENSE__
@@ -15,7 +15,6 @@ https://www.digikey.com/eewiki/display/microcontroller/Software+FIFO+Buffer+for+
 #ifdef ECHO
 
 /*
-
 ATTiny85 Hookup
 
 RESET -|1 v 8|- Vcc
