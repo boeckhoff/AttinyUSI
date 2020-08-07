@@ -1,6 +1,6 @@
 # AttinyUSI
 
-Repository for reliable, daisy-chained attiny USI communication with timed packages.
+Repository for a proof-of-concept reliable, daisy-chained attiny USI communication with timed packages.
 
 References/Sources:
 
