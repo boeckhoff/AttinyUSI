@@ -1,10 +1,25 @@
 # AttinyUSI
 
-Repository for a proof-of-concept reliable, daisy-chained attiny USI communication with timed packages. For more information read the [report](https://github.com/boeckhoff/AttinyUSI/blob/master/USISerialReport.pdf)(german)
+Repository for a proof-of-concept reliable, daisy-chained attiny USI communication with timed packages.
+
+<img src="media/architecture.png" width="60%">
+
+Connecting the ATtinys like so allows for us to send timed packages to ensure that two messages reach different units in the daisy-chain at the same time
+
+<img src="media/send_with_timing.png" width="60%">
+
+To make sure that differently tuned oscillators do not affect the timing of the messages, each units receive&send times are measured and used to calculate the ideal timing of the messages by the master-unit during initialization.
+
+The slave-units themselves have the following states and transitions:
+
+<img src="media/state_diagram.png" width="60%">
+
+
+For more information read the [report](https://github.com/boeckhoff/AttinyUSI/blob/master/USISerialReport.pdf)(german only)
 
 References/Sources:
 
-Attiny Datasheet http://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf
+ATtiny Datasheet http://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf
 
 AVR instruction Set Manual http://ww1.microchip.com/downloads/en/devicedoc/atmel-0856-avr-instruction-set-manual.pdf
 
