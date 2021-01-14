@@ -10,6 +10,10 @@ Connecting the ATtinys like so allows for us to send timed packages to ensure th
 
 To make sure that differently tuned oscillators do not affect the timing of the messages, each units receive&send times are measured and used to calculate the ideal timing of the messages by the master-unit during initialization.
 
+<img src="media/timing_capture.png" width="60%">
+
+This screenshot shows the timing in action. Two messages are sent from the master unit to two different units at different points in the chain and both units reveice the messages very close to one another.
+
 The slave-units themselves have the following states and transitions:
 
 <img src="media/state_diagram.png" width="60%">
